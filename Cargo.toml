@@ -1,0 +1,6 @@
+[workspace]
+resolver = "3"
+
+members = ["crates/firewheel_clap_node", "crates/test_plugins/test_plugin_basic"]
+
+[workspace.dependencies]
