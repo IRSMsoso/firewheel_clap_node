@@ -9,7 +9,7 @@ Not yet operational
 
 - [ ] CLAP parameters
 - [ ] Add bevy example
-    - [ ] Add features for bevy, bevy_reflect, and serde
+    - [X] Add features for bevy, bevy_reflect, and serde
 - [ ] Support for arbitrary audio port + channel configurations
 - [ ] Tests
     - [ ] For various channel configurations

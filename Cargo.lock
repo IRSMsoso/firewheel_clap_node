@@ -896,10 +896,13 @@ dependencies = [
 name = "firewheel_clap_node"
 version = "0.1.0"
 dependencies = [
+ "bevy_ecs",
+ "bevy_reflect",
  "clack-extensions",
  "clack-host",
  "firewheel-core",
  "log",
+ "serde",
  "thiserror 2.0.18",
 ]
 

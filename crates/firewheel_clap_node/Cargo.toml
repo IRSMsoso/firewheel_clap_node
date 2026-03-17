@@ -3,9 +3,20 @@ name = "firewheel_clap_node"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Enables `Component` derive macros
+bevy = ["dep:bevy_ecs", "firewheel-core/bevy"]
+# Enables `Reflect` derive macros
+bevy_reflect = ["dep:bevy_reflect", "firewheel-core/bevy_reflect"]
+# Enables serde derives for types
+serde = ["dep:serde"]
+
 [dependencies]
 firewheel-core = { git = "https://github.com/IRSMsoso/Firewheel", branch = "fallible-node-construction" }
 clack-host = { git = "https://github.com/prokopyl/clack", rev = "f53f8fc132c001a332c0a7221267812dfb654e92" }
-clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "f53f8fc132c001a332c0a7221267812dfb654e92", features = ["log", "clack-host", "audio-ports"]}
+clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "f53f8fc132c001a332c0a7221267812dfb654e92", features = ["log", "clack-host", "audio-ports", "params"] }
 log = "0.4.29"
 thiserror = "2.0.18"
+bevy_ecs = { version = "0.18", optional = true, default-features = false }
+bevy_reflect = { version = "0.18", optional = true, default-features = false }
+serde = { version = "1", optional = true, features = ["derive"] }

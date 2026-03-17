@@ -1,8 +1,15 @@
-use clack_extensions::audio_ports::{HostAudioPorts, HostAudioPortsImpl, RescanType};
+use clack_extensions::audio_ports::{
+    HostAudioPorts, HostAudioPortsImpl, PluginAudioPorts, RescanType,
+};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
+use clack_extensions::params::{
+    HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamRescanFlags,
+    PluginParams,
+};
 use clack_host::entry::PluginEntryError;
 use clack_host::prelude::*;
 use firewheel_core::channel_config::{ChannelConfig, ChannelCount};
+use firewheel_core::diff::{Diff, Patch};
 use firewheel_core::event::ProcEvents;
 use firewheel_core::node::{
     AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
@@ -11,6 +18,7 @@ use firewheel_core::node::{
 use log::{debug, error, info, warn};
 use std::ffi::{CString, NulError};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use thiserror::Error;
 
 /// Information about this host.
@@ -42,6 +50,7 @@ pub enum ClapNodeError {
 }
 
 /// A node that hosts a CLAP plugin
+#[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "bevy", derive(bevy_ecs::prelude::Component))]
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -85,7 +94,7 @@ impl AudioNode for ClapPluginNode {
             .ok_or_else(|| ClapNodeError::IDNotFound)?;
 
         let plugin_instance = PluginInstance::<FirewheelClapHost>::new(
-            |_| FirewheelClapShared,
+            |_| FirewheelClapShared::new(),
             |_| FirewheelClapMain,
             &entry,
             &id,
@@ -183,6 +192,12 @@ impl AudioNodeProcessor for ClapPluginProcessor {
         events: &mut ProcEvents,
         extra: &mut ProcExtra,
     ) -> firewheel_core::node::ProcessStatus {
+        for patch in events.drain_patches::<ClapPluginNode>() {
+            match patch {
+                ClapPluginNodePatch::Enabled(enabled) => self.enabled = enabled,
+            }
+        }
+
         if !self.enabled {
             return firewheel_core::node::ProcessStatus::Bypass;
         }
@@ -273,22 +288,44 @@ impl AudioNodeProcessor for ClapPluginProcessor {
     }
 }
 
+#[allow(dead_code)]
+struct PluginCallbacks {
+    /// A handle to the plugin's Audio Ports extension, if it supports it.
+    audio_ports: Option<PluginAudioPorts>,
+    params: Option<PluginParams>,
+}
+
 #[derive(Default)]
-pub struct FirewheelClapShared;
+pub struct FirewheelClapShared {
+    callbacks: OnceLock<PluginCallbacks>,
+}
+
+impl FirewheelClapShared {
+    fn new() -> Self {
+        Self {
+            callbacks: OnceLock::new(),
+        }
+    }
+}
 
 // impl<'a> SharedHandler<'a> for MinimalShared {}
 impl<'a> SharedHandler<'a> for FirewheelClapShared {
-    fn request_restart(&self) {
-        println!("Host requested plugin restart.");
+    fn initializing(&self, instance: InitializingPluginHandle<'a>) {
+        let _ = self.callbacks.set(PluginCallbacks {
+            audio_ports: instance.get_extension(),
+            params: instance.get_extension(),
+        });
     }
 
-    fn request_process(&self) {
-        println!("Host requested process.");
-    }
+    fn request_restart(&self) {}
 
-    fn request_callback(&self) {
-        println!("Host requested callback.");
-    }
+    fn request_process(&self) {}
+
+    fn request_callback(&self) {}
+}
+
+impl HostParamsImplShared for FirewheelClapShared {
+    fn request_flush(&self) {}
 }
 
 impl HostLogImpl for FirewheelClapShared {
@@ -328,6 +365,12 @@ impl HostAudioPortsImpl for FirewheelClapMain {
     }
 }
 
+impl HostParamsImplMainThread for FirewheelClapMain {
+    fn rescan(&mut self, flags: ParamRescanFlags) {}
+
+    fn clear(&mut self, param_id: ClapId, flags: ParamClearFlags) {}
+}
+
 pub struct FirewheelClapHost;
 
 impl HostHandlers for FirewheelClapHost {
@@ -336,6 +379,9 @@ impl HostHandlers for FirewheelClapHost {
     type AudioProcessor<'a> = ();
 
     fn declare_extensions(builder: &mut HostExtensions<Self>, _shared: &Self::Shared<'_>) {
-        builder.register::<HostLog>().register::<HostAudioPorts>();
+        builder
+            .register::<HostLog>()
+            .register::<HostAudioPorts>()
+            .register::<HostParams>();
     }
 }
