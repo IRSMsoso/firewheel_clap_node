@@ -1,0 +1,10 @@
+[package]
+name = "bevy_example"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy_seedling = "0.7.1"
+bevy = "0.18.1"
+firewheel_clap_node = { path = "../../crates/firewheel_clap_node", features = ["bevy", "bevy_reflect"] }
+bevy-inspector-egui = "0.36.0"

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
 
-members = ["crates/firewheel_clap_node", "crates/test_plugins/test_plugin_basic", "crates/xtask", "examples/basic_usage", "examples/plugins/delay_plugin"]
+members = ["crates/firewheel_clap_node", "crates/test_plugins/test_plugin_basic", "crates/xtask", "examples/basic_usage", "examples/bevy_example", "examples/plugins/delay_plugin"]
 
 [workspace.dependencies]

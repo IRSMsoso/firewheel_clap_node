@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 firewheel_clap_node = { path = "../../crates/firewheel_clap_node" }
-firewheel = { git = "https://github.com/IRSMsoso/Firewheel", branch = "fallible-node-construction" }
+firewheel = "0.10.0"
 symphonium = { version = "0.7.0", features = ["mp3", "flac"] }

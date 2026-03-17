@@ -12,8 +12,8 @@ use firewheel_core::channel_config::{ChannelConfig, ChannelCount};
 use firewheel_core::diff::{Diff, Patch};
 use firewheel_core::event::ProcEvents;
 use firewheel_core::node::{
-    AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
-    NodeError, ProcBuffers, ProcExtra, ProcInfo,
+    AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, ProcBuffers,
+    ProcExtra, ProcInfo,
 };
 use log::{debug, error, info, warn};
 use std::ffi::{CString, NulError};
@@ -54,18 +54,19 @@ pub enum ClapNodeError {
 #[cfg_attr(feature = "bevy", derive(bevy_ecs::prelude::Component))]
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ClapPluginNode {
-    /// Whether the node is currently enabled.
-    pub enabled: bool,
-}
+pub struct ClapPluginNode {}
 
 impl Default for ClapPluginNode {
     fn default() -> Self {
-        Self { enabled: true }
+        Self {}
     }
 }
 
-#[derive(Default)]
+/// Configuration for a Clap Plugin Node. Both path and ID are required.
+#[derive(Debug, Default, Clone, PartialEq)]
+#[cfg_attr(feature = "bevy", derive(bevy_ecs::prelude::Component))]
+#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ClapPluginNodeConfig {
     /// The path of the CLAP plugin
     pub path: PathBuf,
@@ -77,21 +78,27 @@ pub struct ClapPluginNodeConfig {
 impl AudioNode for ClapPluginNode {
     type Configuration = ClapPluginNodeConfig;
 
-    fn info(&self, configuration: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
+    fn info(&self, configuration: &Self::Configuration) -> AudioNodeInfo {
         // Safety: Loading an external library object file is inherently unsafe
-        let entry = unsafe { PluginEntry::load(configuration.path.as_os_str())? };
+        let entry = unsafe {
+            PluginEntry::load(configuration.path.as_os_str())
+                .expect("Firewheel construction error handling not merged yet")
+        };
 
         let plugin_factory = entry
             .get_plugin_factory()
-            .ok_or_else(|| ClapNodeError::MissingPluginFactory)?;
+            .ok_or_else(|| ClapNodeError::MissingPluginFactory)
+            .expect("Firewheel construction error handling not merged yet");
 
-        let id = CString::new(configuration.id.as_str())?;
+        let id = CString::new(configuration.id.as_str())
+            .expect("Firewheel construction error handling not merged yet");
 
         let _plugin_descriptor = plugin_factory
             .plugin_descriptors()
             .filter_map(|x| x.id())
             .find(|&plugin_id| plugin_id.eq(&id))
-            .ok_or_else(|| ClapNodeError::IDNotFound)?;
+            .ok_or_else(|| ClapNodeError::IDNotFound)
+            .expect("Firewheel construction error handling not merged yet");
 
         let plugin_instance = PluginInstance::<FirewheelClapHost>::new(
             |_| FirewheelClapShared::new(),
@@ -99,23 +106,24 @@ impl AudioNode for ClapPluginNode {
             &entry,
             &id,
             &host_info(),
-        )?;
+        )
+        .expect("Firewheel construction error handling not merged yet");
 
-        Ok(AudioNodeInfo::new()
+        AudioNodeInfo::new()
             .debug_name("clap_plugin")
             .channel_config(ChannelConfig {
                 // TODO: Dynamic channel count based on plugin?
                 num_inputs: ChannelCount::STEREO,
                 num_outputs: ChannelCount::STEREO,
             })
-            .custom_state(plugin_instance))
+            .custom_state(plugin_instance)
     }
 
     fn construct_processor(
         &self,
         _configuration: &Self::Configuration,
         mut cx: ConstructProcessorContext,
-    ) -> Result<impl AudioNodeProcessor, NodeError> {
+    ) -> impl AudioNodeProcessor {
         let audio_config = PluginAudioConfiguration {
             sample_rate: f64::from(u32::from(cx.stream_info.sample_rate)),
             min_frames_count: 0,
@@ -124,17 +132,19 @@ impl AudioNode for ClapPluginNode {
 
         let plugin_instance = cx
             .custom_state_mut::<PluginInstance<FirewheelClapHost>>()
-            .ok_or_else(|| ClapNodeError::PluginInstanceCustomDataMissing)?;
+            .ok_or_else(|| ClapNodeError::PluginInstanceCustomDataMissing)
+            .expect("Firewheel construction error handling not merged yet");
 
         // TODO: Configuration
         let input_channel_count = 2;
         let output_channel_count = 2;
 
-        Ok(ClapPluginProcessor {
-            enabled: self.enabled,
+        ClapPluginProcessor {
             audio_processor: plugin_instance
-                .activate(|_, _| (), audio_config)?
-                .start_processing()?,
+                .activate(|_, _| (), audio_config)
+                .expect("Firewheel construction error handling not merged yet")
+                .start_processing()
+                .expect("Firewheel construction error handling not merged yet"),
             input_ports: AudioPorts::with_capacity(
                 // TODO: Configuration
                 input_channel_count,
@@ -156,13 +166,11 @@ impl AudioNode for ClapPluginNode {
                     * audio_config.max_frames_count as usize
             ]]),
             max_frames: audio_config.max_frames_count as usize,
-        })
+        }
     }
 }
 
 pub struct ClapPluginProcessor {
-    enabled: bool,
-
     /// The started Clap audio processor
     audio_processor: StartedPluginAudioProcessor<FirewheelClapHost>,
 
@@ -190,17 +198,11 @@ impl AudioNodeProcessor for ClapPluginProcessor {
         info: &ProcInfo,
         buffers: ProcBuffers,
         events: &mut ProcEvents,
-        extra: &mut ProcExtra,
+        _extra: &mut ProcExtra,
     ) -> firewheel_core::node::ProcessStatus {
-        for patch in events.drain_patches::<ClapPluginNode>() {
-            match patch {
-                ClapPluginNodePatch::Enabled(enabled) => self.enabled = enabled,
-            }
-        }
-
-        if !self.enabled {
-            return firewheel_core::node::ProcessStatus::Bypass;
-        }
+        // for patch in events.drain_patches::<ClapPluginNode>() {
+        //     match patch {}
+        // }
 
         // Copy buffers host -> plugin
         let mut current_channel = 0;
@@ -356,19 +358,19 @@ pub struct FirewheelClapMain;
 impl<'a> MainThreadHandler<'a> for FirewheelClapMain {}
 
 impl HostAudioPortsImpl for FirewheelClapMain {
-    fn is_rescan_flag_supported(&self, flag: RescanType) -> bool {
+    fn is_rescan_flag_supported(&self, _flag: RescanType) -> bool {
         false
     }
 
-    fn rescan(&mut self, flag: RescanType) {
+    fn rescan(&mut self, _flag: RescanType) {
         // We don't support audio ports changing
     }
 }
 
 impl HostParamsImplMainThread for FirewheelClapMain {
-    fn rescan(&mut self, flags: ParamRescanFlags) {}
+    fn rescan(&mut self, _flags: ParamRescanFlags) {}
 
-    fn clear(&mut self, param_id: ClapId, flags: ParamClearFlags) {}
+    fn clear(&mut self, _param_id: ClapId, _flags: ParamClearFlags) {}
 }
 
 pub struct FirewheelClapHost;
