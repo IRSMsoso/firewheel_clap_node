@@ -1,4 +1,9 @@
-An audio node for [Firewheel](https://github.com/BillyDM/Firewheel) that loads a [CLAP](https://cleveraudio.org/) plugin.
+An audio node for [Firewheel](https://github.com/BillyDM/Firewheel) that loads a [CLAP](https://cleveraudio.org/)
+plugin.
+
+## Status
+
+Not yet operational
 
 ## License
 

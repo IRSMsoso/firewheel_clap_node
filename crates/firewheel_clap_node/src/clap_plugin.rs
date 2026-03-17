@@ -122,7 +122,7 @@ impl AudioNode for ClapPluginNode {
         let output_channel_count = 2;
 
         Ok(ClapPluginProcessor {
-            enabled: false,
+            enabled: self.enabled,
             audio_processor: plugin_instance
                 .activate(|_, _| (), audio_config)?
                 .start_processing()?,
