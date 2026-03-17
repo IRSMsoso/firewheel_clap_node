@@ -25,18 +25,13 @@ struct Delay {
     sample_rate: f32,
 }
 
-/// The [`Params`] derive macro gathers all of the information needed for the wrapper to know about
-/// the plugin's parameters, persistent serializable fields, and nested parameter groups. You can
-/// also easily implement [`Params`] by hand if you want to, for instance, have multiple instances
-/// of a parameters struct for multiple identical oscillators/filters/envelopes.
 #[derive(Params)]
 struct DelayParams {
-    /// The parameter's ID is used to identify the parameter in the wrapped plugin API. As long as
-    /// these IDs remain constant, you can rename and reorder these fields as you wish. The
-    /// parameters are exposed to the host in the same order they were defined. In this case, this
-    /// gain parameter is stored as linear gain while the values are displayed in decibels.
     #[id = "delay_sec"]
     pub delay_sec: FloatParam,
+
+    #[id = "bypass"]
+    pub bypass: BoolParam,
 }
 
 impl Default for Delay {
@@ -52,9 +47,6 @@ impl Default for Delay {
 impl Default for DelayParams {
     fn default() -> Self {
         Self {
-            // This gain is stored as linear gain. NIH-plug comes with useful conversion functions
-            // to treat these kinds of parameters as if we were dealing with decibels. Storing this
-            // as decibels is easier to work with, but requires a conversion for every sample.
             delay_sec: FloatParam::new(
                 "Delay in Seconds",
                 1.0,
@@ -63,6 +55,7 @@ impl Default for DelayParams {
                     max: MAX_DELAY,
                 },
             ),
+            bypass: BoolParam::new("Bypass", false),
         }
     }
 }
@@ -137,7 +130,9 @@ impl Plugin for Delay {
 
                 let delayed_sample = delay_buffer.buffer[next_index];
 
-                *sample = (*sample * 0.5) + (delayed_sample * 0.5);
+                if !self.params.bypass.value() {
+                    *sample = (*sample * 0.5) + (delayed_sample * 0.5);
+                }
 
                 delay_buffer.index = next_index;
             }
