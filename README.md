@@ -14,6 +14,7 @@ Not yet operational
 - [ ] Tests
     - [ ] For various channel configurations
 - [ ] MIDI support?
+- [ ] Realtime logging
 
 ## License
 
