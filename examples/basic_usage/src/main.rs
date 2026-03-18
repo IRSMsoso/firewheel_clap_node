@@ -49,6 +49,8 @@ fn main() {
         Some(ClapPluginNodeConfig {
             path: "target/bundled/delay_plugin.clap".into(),
             id: "firewheel_clap_node.delay".to_string(),
+            num_input_channels: 2.into(),
+            num_output_channels: 2.into(),
         }),
     );
     // .expect("Failed to add clap node");

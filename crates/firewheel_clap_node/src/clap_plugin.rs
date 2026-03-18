@@ -1,5 +1,5 @@
 use clack_extensions::audio_ports::{
-    HostAudioPorts, HostAudioPortsImpl, PluginAudioPorts, RescanType,
+    AudioPortInfoBuffer, HostAudioPorts, HostAudioPortsImpl, PluginAudioPorts, RescanType,
 };
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::params::{
@@ -50,6 +50,10 @@ pub enum ClapNodeError {
     ParseIDFailed(#[from] NulError),
     #[error("PluginInstance not found in custom data")]
     PluginInstanceCustomDataMissing,
+    #[error("Plugin doesn't support the audio ports extension")]
+    PluginLacksAudioPortsExtension,
+    #[error("Plugin doesn't support the provided channel configuration")]
+    WrongChannelConfiguration,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -139,18 +143,27 @@ pub struct ClapPluginNodeConfig {
 
     /// The ID of the CLAP plugin
     pub id: String,
+
+    /// The number of input channels to use for the plugin
+    pub num_input_channels: ChannelCount,
+
+    /// The number of output channels to use for the plugin
+    pub num_output_channels: ChannelCount,
 }
 
 impl AudioNode for ClapPluginNode {
     type Configuration = ClapPluginNodeConfig;
 
     fn info(&self, configuration: &Self::Configuration) -> AudioNodeInfo {
+        info!("Loading plugin dynamic library");
+
         // Safety: Loading an external library object file is inherently unsafe
         let entry = unsafe {
             PluginEntry::load(configuration.path.as_os_str())
                 .expect("Firewheel construction error handling not merged yet")
         };
 
+        info!("Getting plugin factory");
         let plugin_factory = entry
             .get_plugin_factory()
             .ok_or_else(|| ClapNodeError::MissingPluginFactory)
@@ -159,6 +172,7 @@ impl AudioNode for ClapPluginNode {
         let id = CString::new(configuration.id.as_str())
             .expect("Firewheel construction error handling not merged yet");
 
+        info!("Finding plugin descriptor from factory");
         let _plugin_descriptor = plugin_factory
             .plugin_descriptors()
             .filter_map(|x| x.id())
@@ -166,6 +180,7 @@ impl AudioNode for ClapPluginNode {
             .ok_or_else(|| ClapNodeError::IDNotFound)
             .expect("Firewheel construction error handling not merged yet");
 
+        info!("Creating plugin instance");
         let mut plugin_instance = PluginInstance::<FirewheelClapHost>::new(
             |_| FirewheelClapShared::new(),
             |_| FirewheelClapMain,
@@ -174,6 +189,80 @@ impl AudioNode for ClapPluginNode {
             &host_info(),
         )
         .expect("Firewheel construction error handling not merged yet");
+
+        let audio_ports_extension = plugin_instance.access_shared_handler(|shared| {
+            shared
+                .extensions
+                .get()
+                .expect("Plugin extensions should be initialized")
+                .audio_ports
+        });
+
+        let audio_ports_extension = audio_ports_extension
+            .ok_or_else(|| ClapNodeError::PluginLacksAudioPortsExtension)
+            .expect("Firewheel construction error handling not merged yet");
+
+        let num_input_ports =
+            audio_ports_extension.count(&mut plugin_instance.plugin_handle(), true);
+        let num_output_ports =
+            audio_ports_extension.count(&mut plugin_instance.plugin_handle(), false);
+
+        let mut num_plugin_input_channels = 0u32;
+        let mut num_plugin_output_channels = 0u32;
+
+        // Count up plugin input channels
+        for input_port_index in 0..num_input_ports {
+            let mut audio_port_info_buffer = AudioPortInfoBuffer::new();
+
+            let audio_port_info = audio_ports_extension.get(
+                &mut plugin_instance.plugin_handle(),
+                input_port_index,
+                true,
+                &mut audio_port_info_buffer,
+            );
+
+            let Some(audio_port_info) = audio_port_info else {
+                continue;
+            };
+            info!(
+                "Found input port {} with {} channels",
+                String::from_utf8(Vec::from(audio_port_info.name)).unwrap_or("Unknown".to_string()),
+                audio_port_info.channel_count,
+            );
+            num_plugin_input_channels += audio_port_info.channel_count;
+        }
+
+        // Count up plugin output channels
+        for output_port_index in 0..num_output_ports {
+            let mut audio_port_info_buffer = AudioPortInfoBuffer::new();
+
+            let audio_port_info = audio_ports_extension.get(
+                &mut plugin_instance.plugin_handle(),
+                output_port_index,
+                false,
+                &mut audio_port_info_buffer,
+            );
+
+            let Some(audio_port_info) = audio_port_info else {
+                continue;
+            };
+            info!(
+                "Found output port {} with {} channels",
+                String::from_utf8(Vec::from(audio_port_info.name)).unwrap_or("Unknown".to_string()),
+                audio_port_info.channel_count
+            );
+            num_plugin_output_channels += audio_port_info.channel_count;
+        }
+
+        info!("Total plugin input channels: {num_plugin_input_channels}");
+        info!("Total plugin output channels: {num_plugin_output_channels}");
+
+        if num_plugin_input_channels != configuration.num_input_channels.get()
+            || num_plugin_output_channels != configuration.num_output_channels.get()
+        {
+            Err(ClapNodeError::WrongChannelConfiguration)
+                .expect("Firewheel construction error handling not merged yet")
+        }
 
         let name = match plugin_instance.plugin_shared_handle().descriptor() {
             Some(descriptor) => match descriptor.name() {
@@ -222,16 +311,15 @@ impl AudioNode for ClapPluginNode {
         AudioNodeInfo::new()
             .debug_name("clap_plugin")
             .channel_config(ChannelConfig {
-                // TODO: Dynamic channel count based on plugin?
-                num_inputs: ChannelCount::STEREO,
-                num_outputs: ChannelCount::STEREO,
+                num_inputs: configuration.num_input_channels,
+                num_outputs: configuration.num_output_channels,
             })
             .custom_state(plugin_instance)
     }
 
     fn construct_processor(
         &self,
-        _configuration: &Self::Configuration,
+        configuration: &Self::Configuration,
         mut cx: ConstructProcessorContext,
     ) -> impl AudioNodeProcessor {
         let audio_config = PluginAudioConfiguration {
@@ -245,10 +333,6 @@ impl AudioNode for ClapPluginNode {
             .ok_or_else(|| ClapNodeError::PluginInstanceCustomDataMissing)
             .expect("Firewheel construction error handling not merged yet");
 
-        // TODO: Configuration
-        let input_channel_count = 2;
-        let output_channel_count = 2;
-
         ClapPluginProcessor {
             audio_processor: plugin_instance
                 .activate(|_, _| (), audio_config)
@@ -256,24 +340,22 @@ impl AudioNode for ClapPluginNode {
                 .start_processing()
                 .expect("Firewheel construction error handling not merged yet"),
             input_ports: AudioPorts::with_capacity(
-                // TODO: Configuration
-                input_channel_count,
+                configuration.num_input_channels.get() as usize,
                 1,
             ),
             output_ports: AudioPorts::with_capacity(
-                // TODO: Configuration
-                output_channel_count,
+                configuration.num_output_channels.get() as usize,
                 1,
             ),
             input_port_channels: Box::new([vec![
                 0.0;
-                input_channel_count
-                    * audio_config.max_frames_count as usize
+                (configuration.num_input_channels.get() * audio_config.max_frames_count)
+                    as usize
             ]]),
             output_port_channels: Box::new([vec![
                 0.0;
-                output_channel_count
-                    * audio_config.max_frames_count as usize
+                (configuration.num_output_channels.get() * audio_config.max_frames_count)
+                    as usize
             ]]),
             max_frames: audio_config.max_frames_count as usize,
         }

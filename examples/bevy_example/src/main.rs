@@ -29,7 +29,9 @@ fn play_sound(mut commands: Commands, server: Res<AssetServer>) {
             ClapPluginNode::default(),
             ClapPluginNodeConfig {
                 path: "target/bundled/delay_plugin.clap".into(),
-                id: "firewheel_clap_node.delay".to_string()
+                id: "firewheel_clap_node.delay".to_string(),
+                num_input_channels: 2.into(),
+                num_output_channels: 2.into(),
             }
         )],
     ));

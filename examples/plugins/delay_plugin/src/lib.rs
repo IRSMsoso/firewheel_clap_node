@@ -65,7 +65,7 @@ impl Plugin for Delay {
     const VENDOR: &'static str = "Firewheel Clap Node";
     // You can use `env!("CARGO_PKG_HOMEPAGE")` to reference the homepage field from the
     // `Cargo.toml` file here
-    const URL: &'static str = "https://github.com/IRSMsoso/firewheel_clap_node";
+    const URL: &'static str = env!("CARGO_PKG_HOMEPAGE");
     const EMAIL: &'static str = "info@example.com";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
