@@ -370,7 +370,7 @@ impl AudioNodeProcessor for ClapPluginProcessor {
                 AudioPortBuffer {
                     channels: AudioPortBufferType::f32_input_only(
                         port_buf
-                            .chunks_exact_mut(info.frames)
+                            .chunks_exact_mut(self.max_frames)
                             .map(|buffer| InputChannel {
                                 buffer: &mut buffer[..info.frames],
                                 is_constant: true,
@@ -388,7 +388,7 @@ impl AudioNodeProcessor for ClapPluginProcessor {
                         latency: 0,
                         channels: AudioPortBufferType::f32_output_only(
                             port_buf
-                                .chunks_exact_mut(info.frames)
+                                .chunks_exact_mut(self.max_frames)
                                 .map(|buf| &mut buf[..info.frames]),
                         ),
                     }
