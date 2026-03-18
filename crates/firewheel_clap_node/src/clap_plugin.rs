@@ -3,19 +3,22 @@ use clack_extensions::audio_ports::{
 };
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::params::{
-    HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamRescanFlags,
-    PluginParams,
+    HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamInfoBuffer,
+    ParamRescanFlags, PluginParams,
 };
 use clack_host::entry::PluginEntryError;
+use clack_host::events::event_types::ParamValueEvent;
 use clack_host::prelude::*;
+use clack_host::utils::Cookie;
 use firewheel_core::channel_config::{ChannelConfig, ChannelCount};
-use firewheel_core::diff::{Diff, Patch};
-use firewheel_core::event::ProcEvents;
+use firewheel_core::diff::{Diff, EventQueue, Patch, PatchError, PathBuilder};
+use firewheel_core::event::{ParamData, ProcEvents};
 use firewheel_core::node::{
     AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, ProcBuffers,
     ProcExtra, ProcInfo,
 };
 use log::{debug, error, info, warn};
+use std::collections::HashMap;
 use std::ffi::{CString, NulError};
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -49,16 +52,79 @@ pub enum ClapNodeError {
     PluginInstanceCustomDataMissing,
 }
 
-/// A node that hosts a CLAP plugin
-#[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "bevy", derive(bevy_ecs::prelude::Component))]
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ClapPluginNode {}
+pub struct ClapPluginParams {
+    // Mapping between CLAP parameter ID and that parameter's value
+    pub mapping: HashMap<u32, f64>,
+}
+
+impl ClapPluginParams {
+    fn new() -> Self {
+        Self {
+            mapping: HashMap::new(),
+        }
+    }
+}
+
+impl Patch for ClapPluginParams {
+    type Patch = (u32, f64);
+
+    fn patch(data: &ParamData, path: &[u32]) -> Result<Self::Patch, PatchError> {
+        match data {
+            ParamData::F64(value) => Ok((
+                *path
+                    .iter()
+                    .next_back()
+                    .ok_or_else(|| PatchError::InvalidPath)?,
+                *value,
+            )),
+            _ => Err(PatchError::InvalidData),
+        }
+    }
+
+    fn apply(&mut self, patch: Self::Patch) {
+        self.mapping.insert(patch.0, patch.1);
+    }
+}
+
+impl Diff for ClapPluginParams {
+    fn diff<E: EventQueue>(&self, baseline: &Self, path: PathBuilder, event_queue: &mut E) {
+        for param in &self.mapping {
+            let base_line_value = baseline.mapping.get(param.0);
+
+            match base_line_value {
+                Some(base_line_value) => {
+                    // If we already have that key
+                    param
+                        .1
+                        .diff(base_line_value, path.with(*param.0), event_queue)
+                }
+                None => {
+                    // New value
+                    event_queue.push_param(*param.1, path.with(*param.0));
+                }
+            }
+        }
+    }
+}
+
+/// A node that hosts a CLAP plugin
+#[derive(Diff, Patch, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "bevy", derive(bevy_ecs::prelude::Component))]
+#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ClapPluginNode {
+    pub params: ClapPluginParams,
+}
 
 impl Default for ClapPluginNode {
     fn default() -> Self {
-        Self {}
+        Self {
+            params: ClapPluginParams::new(),
+        }
     }
 }
 
@@ -100,7 +166,7 @@ impl AudioNode for ClapPluginNode {
             .ok_or_else(|| ClapNodeError::IDNotFound)
             .expect("Firewheel construction error handling not merged yet");
 
-        let plugin_instance = PluginInstance::<FirewheelClapHost>::new(
+        let mut plugin_instance = PluginInstance::<FirewheelClapHost>::new(
             |_| FirewheelClapShared::new(),
             |_| FirewheelClapMain,
             &entry,
@@ -108,6 +174,50 @@ impl AudioNode for ClapPluginNode {
             &host_info(),
         )
         .expect("Firewheel construction error handling not merged yet");
+
+        let name = match plugin_instance.plugin_shared_handle().descriptor() {
+            Some(descriptor) => match descriptor.name() {
+                Some(name) => name.to_string_lossy().to_string(),
+                None => "Unknown".into(),
+            },
+            None => "Unknown".into(),
+        };
+
+        let params = plugin_instance.access_shared_handler(|shared| {
+            shared
+                .extensions
+                .get()
+                .expect("Plugin extensions should be initialized")
+                .params
+        });
+
+        if let Some(params) = params {
+            let mut plugin_handle = plugin_instance.plugin_handle();
+
+            // Get the total number of parameters
+            let param_count = params.count(&mut plugin_handle);
+
+            info!("Clap plugin \"{}\" loaded", name);
+            let mut parameters_log = "[Parameters]\n".to_string();
+
+            // Iterate through all parameters
+            for i in 0..param_count {
+                let mut buffer = ParamInfoBuffer::new();
+
+                // Get parameter info for this index
+                if let Some(param_info) =
+                    params.get_info(&mut plugin_instance.plugin_handle(), i, &mut buffer)
+                {
+                    // Extract the parameter name
+                    let param_name = String::from_utf8(Vec::from(param_info.name))
+                        .unwrap_or("Unknown".to_string());
+
+                    parameters_log += &format!("- {}: {:?}\n", param_info.id.get(), param_name);
+                }
+            }
+
+            info!("{}", parameters_log);
+        }
 
         AudioNodeInfo::new()
             .debug_name("clap_plugin")
@@ -200,9 +310,41 @@ impl AudioNodeProcessor for ClapPluginProcessor {
         events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> firewheel_core::node::ProcessStatus {
-        // for patch in events.drain_patches::<ClapPluginNode>() {
-        //     match patch {}
-        // }
+        let mut clap_events = Vec::new();
+
+        for patch in events.drain_patches::<ClapPluginNode>() {
+            match patch {
+                ClapPluginNodePatch::Params(param) => {
+                    clap_events.push(ParamValueEvent::new(
+                        0,
+                        ClapId::from(param.0),
+                        Pckn::match_all(),
+                        param.1,
+                        Cookie::default(),
+                    ));
+                }
+            };
+        }
+
+        if !clap_events.is_empty() {
+            // Retrieve params extension
+            let params = self.audio_processor.access_shared_handler(|shared| {
+                shared
+                    .extensions
+                    .get()
+                    .expect("Extensions should be initialized")
+                    .params
+            });
+
+            // Flush param changes to processor
+            if let Some(params) = params {
+                params.flush_active(
+                    &mut self.audio_processor.plugin_handle(),
+                    &InputEvents::from_buffer(&clap_events),
+                    &mut OutputEvents::void(),
+                )
+            }
+        }
 
         // Copy buffers host -> plugin
         let mut current_channel = 0;
@@ -291,7 +433,7 @@ impl AudioNodeProcessor for ClapPluginProcessor {
 }
 
 #[allow(dead_code)]
-struct PluginCallbacks {
+struct CachedExtensions {
     /// A handle to the plugin's Audio Ports extension, if it supports it.
     audio_ports: Option<PluginAudioPorts>,
     params: Option<PluginParams>,
@@ -299,13 +441,13 @@ struct PluginCallbacks {
 
 #[derive(Default)]
 pub struct FirewheelClapShared {
-    callbacks: OnceLock<PluginCallbacks>,
+    extensions: OnceLock<CachedExtensions>,
 }
 
 impl FirewheelClapShared {
     fn new() -> Self {
         Self {
-            callbacks: OnceLock::new(),
+            extensions: OnceLock::new(),
         }
     }
 }
@@ -313,7 +455,7 @@ impl FirewheelClapShared {
 // impl<'a> SharedHandler<'a> for MinimalShared {}
 impl<'a> SharedHandler<'a> for FirewheelClapShared {
     fn initializing(&self, instance: InitializingPluginHandle<'a>) {
-        let _ = self.callbacks.set(PluginCallbacks {
+        let _ = self.extensions.set(CachedExtensions {
             audio_ports: instance.get_extension(),
             params: instance.get_extension(),
         });

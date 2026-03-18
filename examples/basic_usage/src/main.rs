@@ -1,3 +1,4 @@
+use firewheel::diff::Memo;
 use firewheel::nodes::sampler::{RepeatMode, SamplerConfig, SamplerNode};
 use firewheel::FirewheelContext;
 use firewheel_clap_node::clap_plugin::{ClapPluginNode, ClapPluginNodeConfig};
@@ -7,6 +8,8 @@ use symphonium::SymphoniumLoader;
 const UPDATE_INTERVAL: Duration = Duration::from_millis(15);
 
 fn main() {
+    simple_logger::SimpleLogger::new().env().init().unwrap();
+
     let mut cx = FirewheelContext::new(Default::default());
     cx.start_stream(Default::default()).unwrap();
 
@@ -39,10 +42,10 @@ fn main() {
     );
     // .expect("Failed to add sampler node");
 
-    let clap_node = ClapPluginNode::default();
+    let mut clap_node = Memo::new(ClapPluginNode::default());
 
     let clap_node_id = cx.add_node(
-        clap_node,
+        (*clap_node).clone(),
         Some(ClapPluginNodeConfig {
             path: "target/bundled/delay_plugin.clap".into(),
             id: "firewheel_clap_node.delay".to_string(),
@@ -57,6 +60,11 @@ fn main() {
 
     cx.connect(clap_node_id, graph_out_id, &[(0, 1), (0, 1)], false)
         .unwrap();
+
+    clap_node.params.mapping.insert(95467907, 0.007);
+    clap_node.params.mapping.insert(773352680, 0.0);
+
+    clap_node.update_memo(&mut cx.event_queue(clap_node_id));
 
     loop {
         if let Err(e) = cx.update() {

@@ -27,7 +27,7 @@ struct Delay {
 
 #[derive(Params)]
 struct DelayParams {
-    #[id = "delay_sec"]
+    #[id = "delay"]
     pub delay_sec: FloatParam,
 
     #[id = "bypass"]

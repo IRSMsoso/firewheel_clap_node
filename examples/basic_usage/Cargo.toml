@@ -7,3 +7,4 @@ edition = "2024"
 firewheel_clap_node = { path = "../../crates/firewheel_clap_node" }
 firewheel = "0.10.0"
 symphonium = { version = "0.7.0", features = ["mp3", "flac"] }
+simple_logger = "5.2.0"
