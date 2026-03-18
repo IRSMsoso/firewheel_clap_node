@@ -6,12 +6,12 @@ plugin.
 - [X] Load arbitrary CLAP plugins by path and ID
 - [X] Process audio
 - [X] Works with bevy_seedling
-- [ ] Set CLAP parameters
+- [X] Set CLAP parameters
 - [ ] Send MIDI data
 
 ## TODO
 
-- [ ] CLAP parameters
+- [X] CLAP parameters
 - [X] Add bevy example
     - [X] Add features for bevy, bevy_reflect, and serde
 - [ ] Support for arbitrary audio port + channel configurations
